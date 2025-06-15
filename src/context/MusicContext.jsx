@@ -1,169 +1,144 @@
+// src/context/MusicContext.jsx
 import React, {
   useState,
   useRef,
-  useEffect,
   createContext,
   useCallback,
+  useEffect,
 } from "react";
-import { initialSongs } from "../data/mockData.js";
+import YouTube from "react-youtube";
 
 export const MusicContext = createContext();
+const API_KEY = import.meta.env.VITE_YOUTUBE_API_KEY;
 
 export const MusicProvider = ({ children }) => {
-  const [songs] = useState(initialSongs);
-  const [currentSongIndex, setCurrentSongIndex] = useState(null);
+  const [songs, setSongs] = useState([]);
+  const [currentSong, setCurrentSong] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [trackProgress, setTrackProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
-  const [isShuffling, setIsShuffling] = useState(false);
-  const [repeatMode, setRepeatMode] = useState("none"); // 'none', 'one', 'all'
+  const [showVideo, setShowVideo] = useState(true);
+  const [duration, setDuration] = useState(0);
+  const [trackProgress, setTrackProgress] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  const audioRef = useRef(new Audio());
+  const playerRef = useRef(null);
   const intervalRef = useRef();
-  const isReady = useRef(false);
 
-  const currentSong =
-    currentSongIndex !== null ? songs[currentSongIndex] : null;
-
+  // This effect handles telling the YouTube player to play or pause
   useEffect(() => {
-    audioRef.current.volume = volume;
+    if (!playerRef.current) return;
+    if (isPlaying) {
+      playerRef.current.playVideo();
+    } else {
+      playerRef.current.pauseVideo();
+    }
+  }, [isPlaying, playerRef]);
+
+  // This effect handles volume changes
+  useEffect(() => {
+    if (playerRef.current?.setVolume) {
+      playerRef.current.setVolume(volume * 100);
+    }
   }, [volume]);
 
-  useEffect(() => {
-    if (isPlaying && isReady.current) {
-      audioRef.current.play();
-      startTimer();
-    } else {
-      clearInterval(intervalRef.current);
-      audioRef.current.pause();
-    }
-  }, [isPlaying]);
-
-  useEffect(() => {
-    return () => {
-      audioRef.current.pause();
-      clearInterval(intervalRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (currentSong) {
-      isReady.current = false;
-      audioRef.current.pause();
-      audioRef.current = new Audio(currentSong.src);
-      audioRef.current.volume = volume;
-      setTrackProgress(0);
-
-      audioRef.current.oncanplaythrough = () => {
-        isReady.current = true;
-        setDuration(audioRef.current.duration);
-        if (isPlaying) {
-          audioRef.current.play();
-          startTimer();
+  const searchSongs = async (query) => {
+    if (!query) return;
+    setIsLoading(true);
+    setError(null);
+    setSongs([]);
+    try {
+      const response = await fetch(
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=12&q=${query}&key=${API_KEY}&type=video`
+      );
+      const data = await response.json();
+      if (data.items) {
+        const searchedSongs = data.items.map((item) => ({
+          id: item.id.videoId,
+          title: item.snippet.title,
+          artist: item.snippet.channelTitle,
+          albumArt: item.snippet.thumbnails.high.url,
+        }));
+        setSongs(searchedSongs);
+        if (searchedSongs.length > 0) {
+          setCurrentSong(searchedSongs[0]);
+          setIsPlaying(true);
         }
-      };
-
-      audioRef.current.onended = () => {
-        handleSongEnd();
-      };
-    }
-  }, [currentSongIndex]);
-
-  const startTimer = () => {
-    clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(() => {
-      setTrackProgress(audioRef.current.currentTime);
-    }, 1000);
-  };
-
-  const handleSongEnd = () => {
-    if (repeatMode === "one") {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play();
-    } else {
-      playNext(true); // Pass true to indicate it's an auto-next
+      } else if (data.error) {
+        setError(data.error.message || "An error occurred with the API.");
+      }
+    } catch (err) {
+      console.error("Error searching for songs:", err);
+      setError("Failed to fetch songs. Check your API key and network.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const onScrub = (value) => {
-    clearInterval(intervalRef.current);
-    audioRef.current.currentTime = value;
-    setTrackProgress(audioRef.current.currentTime);
-  };
+  const playNext = useCallback(() => {
+    const currentIndex = songs.findIndex((song) => song.id === currentSong?.id);
+    const nextIndex = (currentIndex + 1) % songs.length;
+    setCurrentSong(songs[nextIndex]);
+  }, [songs, currentSong]);
 
-  const onScrubEnd = () => {
-    if (isPlaying) {
-      startTimer();
-    }
-  };
+  const playPrev = useCallback(() => {
+    const currentIndex = songs.findIndex((song) => song.id === currentSong?.id);
+    const prevIndex = (currentIndex - 1 + songs.length) % songs.length;
+    setCurrentSong(songs[prevIndex]);
+  }, [songs, currentSong]);
 
   const togglePlay = useCallback(() => {
-    if (currentSongIndex === null && songs.length > 0) {
-      setCurrentSongIndex(0);
-      setIsPlaying(true);
-    } else {
+    if (currentSong) {
       setIsPlaying((prev) => !prev);
     }
-  }, [currentSongIndex, songs]);
+  }, [currentSong]);
 
   const playSong = useCallback(
-    (index) => {
-      if (currentSongIndex === index) {
+    (song) => {
+      if (currentSong?.id === song.id) {
         togglePlay();
       } else {
-        setCurrentSongIndex(index);
+        setCurrentSong(song);
         setIsPlaying(true);
       }
     },
-    [currentSongIndex, togglePlay]
+    [currentSong, togglePlay]
   );
 
-  const playNext = useCallback(
-    (isAutoNext = false) => {
-      if (songs.length === 0) return;
-
-      if (isShuffling) {
-        let nextIndex;
-        do {
-          nextIndex = Math.floor(Math.random() * songs.length);
-        } while (songs.length > 1 && nextIndex === currentSongIndex);
-        setCurrentSongIndex(nextIndex);
-        return;
-      }
-
-      const isLastSong = currentSongIndex === songs.length - 1;
-      if (repeatMode === "all" || !isLastSong) {
-        const newIndex = isLastSong ? 0 : currentSongIndex + 1;
-        setCurrentSongIndex(newIndex);
-      } else if (isAutoNext && isLastSong) {
-        // Stop at the end of the playlist if not repeating
-        setIsPlaying(false);
-        setCurrentSongIndex(null);
-      } else if (!isAutoNext) {
-        // Allow manual next to loop to start
-        setCurrentSongIndex(0);
-      }
-    },
-    [songs, currentSongIndex, isShuffling, repeatMode]
-  );
-
-  const playPrev = useCallback(() => {
-    if (songs.length > 0) {
-      const newIndex = (currentSongIndex - 1 + songs.length) % songs.length;
-      setCurrentSongIndex(newIndex);
-      setIsPlaying(true);
+  const onScrub = (value) => {
+    if (playerRef.current) {
+      playerRef.current.seekTo(value);
+      setTrackProgress(value);
     }
-  }, [songs, currentSongIndex]);
-
-  const toggleShuffle = () => setIsShuffling((prev) => !prev);
-
-  const cycleRepeatMode = () => {
-    const modes = ["none", "all", "one"];
-    const currentModeIndex = modes.indexOf(repeatMode);
-    const nextModeIndex = (currentModeIndex + 1) % modes.length;
-    setRepeatMode(modes[nextModeIndex]);
   };
+
+  const toggleVideo = () => setShowVideo((prev) => !prev);
+
+  // --- YouTube Player Event Handlers ---
+  const onPlayerReady = (event) => {
+    playerRef.current = event.target;
+    playerRef.current.setVolume(volume * 100);
+  };
+
+  const onPlayerStateChange = (event) => {
+    if (event.data === window.YT.PlayerState.PLAYING) {
+      setIsPlaying(true);
+      setDuration(playerRef.current.getDuration());
+      intervalRef.current = setInterval(() => {
+        setTrackProgress(playerRef.current.getCurrentTime());
+      }, 500);
+    } else {
+      setIsPlaying(false);
+      clearInterval(intervalRef.current);
+    }
+    if (event.data === window.YT.PlayerState.ENDED) {
+      playNext();
+    }
+  };
+
+  const videoContainerClass = showVideo
+    ? "fixed z-50 bottom-24 sm:bottom-36 right-4 bg-black p-2 rounded-lg shadow-2xl transition-all w-[320px] sm:w-[480px]"
+    : "fixed -z-10 -top-full -left-full opacity-0";
 
   const value = {
     songs,
@@ -172,20 +147,37 @@ export const MusicProvider = ({ children }) => {
     trackProgress,
     duration,
     volume,
-    isShuffling,
-    repeatMode,
+    showVideo,
+    isLoading,
+    error,
     playSong,
     togglePlay,
     playNext,
     playPrev,
     onScrub,
-    onScrubEnd,
     setVolume,
-    toggleShuffle,
-    cycleRepeatMode,
+    searchSongs,
+    toggleVideo,
   };
 
   return (
-    <MusicContext.Provider value={value}>{children}</MusicContext.Provider>
+    <MusicContext.Provider value={value}>
+      {children}
+      <div className={videoContainerClass}>
+        {currentSong && (
+          <YouTube
+            videoId={currentSong.id}
+            opts={{
+              height: "180",
+              width: "100%",
+              playerVars: { autoplay: 1, controls: 0 },
+            }}
+            onReady={onPlayerReady}
+            onStateChange={onPlayerStateChange}
+            key={currentSong.id}
+          />
+        )}
+      </div>
+    </MusicContext.Provider>
   );
 };
