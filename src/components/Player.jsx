@@ -5,11 +5,14 @@ import {
   SkipBack,
   SkipForward,
   Volume2,
+  Volume1,
+  VolumeX,
   Maximize2,
   Heart,
   Mic2,
   ListMusic,
   Repeat,
+  Repeat1,
   Shuffle,
 } from "lucide-react";
 import { useMusic } from "../hooks/useMusic.js";
@@ -25,10 +28,16 @@ const Player = () => {
     duration,
     onScrub,
     onScrubEnd,
+    volume,
+    setVolume,
+    isShuffling,
+    toggleShuffle,
+    repeatMode,
+    cycleRepeatMode,
   } = useMusic();
 
   const formatTime = (time) => {
-    if (isNaN(time)) return "0:00";
+    if (isNaN(time) || time === 0) return "0:00";
     const minutes = Math.floor(time / 60);
     const seconds = Math.floor(time % 60)
       .toString()
@@ -37,6 +46,26 @@ const Player = () => {
   };
 
   const currentPercentage = duration ? (trackProgress / duration) * 100 : 0;
+
+  const getRepeatIcon = () => {
+    const commonProps = { size: 20 };
+    switch (repeatMode) {
+      case "one":
+        return <Repeat1 {...commonProps} className="text-green-500" />;
+      case "all":
+        return <Repeat {...commonProps} className="text-green-500" />;
+      default:
+        return (
+          <Repeat {...commonProps} className="text-zinc-300 hover:text-white" />
+        );
+    }
+  };
+
+  const getVolumeIcon = () => {
+    if (Number(volume) === 0) return <VolumeX size={20} />;
+    if (Number(volume) < 0.5) return <Volume1 size={20} />;
+    return <Volume2 size={20} />;
+  };
 
   if (!currentSong) {
     return (
@@ -68,15 +97,19 @@ const Player = () => {
 
       <div className="flex flex-col items-center gap-2 w-1/3">
         <div className="flex items-center gap-6">
-          <Shuffle
-            size={20}
-            className="text-zinc-300 hover:text-white cursor-pointer hidden sm:block"
-          />
-          <SkipBack
-            size={20}
-            className="text-zinc-300 hover:text-white cursor-pointer"
-            onClick={playPrev}
-          />
+          <button onClick={toggleShuffle} className="hidden sm:block">
+            <Shuffle
+              size={20}
+              className={
+                isShuffling
+                  ? "text-green-500"
+                  : "text-zinc-300 hover:text-white"
+              }
+            />
+          </button>
+          <button onClick={playPrev}>
+            <SkipBack size={20} className="text-zinc-300 hover:text-white" />
+          </button>
           <button
             onClick={togglePlay}
             className="w-12 h-12 flex items-center justify-center pl-0.5 rounded-full bg-white text-black hover:scale-105 transition-transform"
@@ -87,32 +120,27 @@ const Player = () => {
               <Play size={24} fill="black" />
             )}
           </button>
-          <SkipForward
-            size={20}
-            className="text-zinc-300 hover:text-white cursor-pointer"
-            onClick={playNext}
-          />
-          <Repeat
-            size={20}
-            className="text-zinc-300 hover:text-white cursor-pointer hidden sm:block"
-          />
+          <button onClick={() => playNext()}>
+            <SkipForward size={20} className="text-zinc-300 hover:text-white" />
+          </button>
+          <button onClick={cycleRepeatMode} className="hidden sm:block">
+            {getRepeatIcon()}
+          </button>
         </div>
         <div className="hidden md:flex items-center gap-2 w-full">
           <span className="text-xs text-zinc-400">
             {formatTime(trackProgress)}
           </span>
-          <div className="h-1 rounded-full w-full bg-zinc-600 group relative">
-            <input
-              type="range"
-              value={trackProgress}
-              step="1"
-              min="0"
-              max={duration ? duration : 0}
-              className="w-full h-1 rounded-full bg-transparent appearance-none cursor-pointer absolute z-10"
-              onChange={(e) => onScrub(e.target.value)}
-              onMouseUp={onScrubEnd}
-              onTouchEnd={onScrubEnd}
-            />
+          <div
+            className="h-1 rounded-full w-full bg-zinc-600 group relative cursor-pointer"
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const clickPosition = e.clientX - rect.left;
+              const newTime = (clickPosition / rect.width) * duration;
+              onScrub(newTime);
+              onScrubEnd();
+            }}
+          >
             <div
               className="bg-zinc-400 h-1 rounded-full absolute"
               style={{ width: `${currentPercentage}%` }}
@@ -130,10 +158,16 @@ const Player = () => {
         <Mic2 size={20} className="hidden lg:block" />
         <ListMusic size={20} className="hidden lg:block" />
         <div className="hidden md:flex items-center gap-2">
-          <Volume2 size={20} />
-          <div className="h-1 rounded-full w-24 bg-zinc-600">
-            <div className="bg-white h-1 rounded-full w-3/4"></div>
-          </div>
+          {getVolumeIcon()}
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value={volume}
+            onChange={(e) => setVolume(e.target.value)}
+            className="w-24 h-1 bg-zinc-600 rounded-lg appearance-none cursor-pointer accent-rose-500"
+          />
         </div>
         <Maximize2 size={20} className="hidden lg:block" />
       </div>
