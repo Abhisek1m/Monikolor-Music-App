@@ -11,6 +11,9 @@ import {
   Heart,
   Video,
   VideoOff,
+  Repeat,
+  Repeat1,
+  Shuffle,
 } from "lucide-react";
 import { useMusic } from "../hooks/useMusic.js";
 
@@ -24,10 +27,15 @@ const Player = () => {
     trackProgress,
     duration,
     onScrub,
+    onScrubEnd,
     volume,
     setVolume,
     showVideo,
     toggleVideo,
+    isShuffling,
+    toggleShuffle,
+    repeatMode,
+    cycleRepeatMode,
   } = useMusic();
 
   const formatTime = (time) => {
@@ -47,8 +55,28 @@ const Player = () => {
     return <Volume2 size={20} />;
   };
 
+  const getRepeatIcon = () => {
+    const commonProps = { size: 20 };
+    switch (repeatMode) {
+      case "one":
+        return <Repeat1 {...commonProps} className="text-green-500" />;
+      case "all":
+        return <Repeat {...commonProps} className="text-green-500" />;
+      default:
+        return (
+          <Repeat {...commonProps} className="text-zinc-400 hover:text-white" />
+        );
+    }
+  };
+
   return (
     <footer className="bg-zinc-900/80 backdrop-blur-md border-t border-zinc-700 p-4 flex flex-col sm:flex-row items-center justify-between fixed bottom-0 w-full">
+      {/* Mobile Progress Bar */}
+      <div
+        className="sm:hidden absolute top-0 left-0 h-1 bg-rose-500"
+        style={{ width: `${currentPercentage}%` }}
+      ></div>
+
       {/* Song Info */}
       <div className="flex items-center gap-3 w-full sm:w-1/3 mb-3 sm:mb-0">
         {currentSong ? (
@@ -74,6 +102,20 @@ const Player = () => {
       <div className="flex flex-col items-center gap-2 w-full sm:w-1/3">
         <div className="flex items-center gap-6">
           <button
+            onClick={toggleShuffle}
+            className="hidden sm:block disabled:opacity-50"
+            disabled={!currentSong}
+          >
+            <Shuffle
+              size={20}
+              className={
+                isShuffling
+                  ? "text-green-500"
+                  : "text-zinc-400 hover:text-white"
+              }
+            />
+          </button>
+          <button
             onClick={playPrev}
             disabled={!currentSong}
             className="disabled:opacity-50"
@@ -98,27 +140,30 @@ const Player = () => {
           >
             <SkipForward size={20} />
           </button>
+          <button
+            onClick={cycleRepeatMode}
+            className="hidden sm:block disabled:opacity-50"
+            disabled={!currentSong}
+          >
+            {getRepeatIcon()}
+          </button>
         </div>
-        <div className="flex items-center gap-2 w-full">
+        <div className="hidden sm:flex items-center gap-2 w-full">
           <span className="text-xs text-zinc-400">
             {formatTime(trackProgress)}
           </span>
-          <div className="w-full bg-zinc-700 rounded-full h-1 group relative">
-            <div
-              className="bg-white rounded-full h-1"
-              style={{ width: `${currentPercentage}%` }}
-            ></div>
-            <input
-              type="range"
-              value={trackProgress}
-              step="1"
-              min="0"
-              max={duration || 0}
-              className="w-full absolute h-full top-0 left-0 appearance-none opacity-0 [&::-webkit-slider-thumb]:appearance-none cursor-pointer"
-              onChange={(e) => onScrub(e.target.value)}
-              disabled={!currentSong}
-            />
-          </div>
+          <input
+            type="range"
+            value={trackProgress}
+            step="1"
+            min="0"
+            max={duration || 0}
+            className="w-full h-1 rounded-full bg-zinc-700 appearance-none cursor-pointer accent-rose-500"
+            onChange={(e) => onScrub(e.target.value)}
+            onMouseUp={onScrubEnd}
+            onTouchEnd={onScrubEnd}
+            disabled={!currentSong}
+          />
           <span className="text-xs text-zinc-400">{formatTime(duration)}</span>
         </div>
       </div>

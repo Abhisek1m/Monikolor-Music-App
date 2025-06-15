@@ -20,7 +20,10 @@ export const MusicProvider = ({ children }) => {
   const [duration, setDuration] = useState(0);
   const [trackProgress, setTrackProgress] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [error, setError] = useState(null);
+  const [nextPageToken, setNextPageToken] = useState("");
+  const [currentQuery, setCurrentQuery] = useState("");
 
   const playerRef = useRef(null);
   const intervalRef = useRef();
@@ -33,7 +36,7 @@ export const MusicProvider = ({ children }) => {
     } else {
       playerRef.current.pauseVideo();
     }
-  }, [isPlaying, playerRef]);
+  }, [isPlaying]);
 
   // This effect handles volume changes
   useEffect(() => {
@@ -46,7 +49,8 @@ export const MusicProvider = ({ children }) => {
     if (!query) return;
     setIsLoading(true);
     setError(null);
-    setSongs([]);
+    setSongs([]); // Clear previous results
+    setCurrentQuery(query);
     try {
       const response = await fetch(
         `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=12&q=${query}&key=${API_KEY}&type=video`
@@ -60,9 +64,12 @@ export const MusicProvider = ({ children }) => {
           albumArt: item.snippet.thumbnails.high.url,
         }));
         setSongs(searchedSongs);
+        setNextPageToken(data.nextPageToken || "");
         if (searchedSongs.length > 0) {
           setCurrentSong(searchedSongs[0]);
           setIsPlaying(true);
+        } else {
+          setCurrentSong(null);
         }
       } else if (data.error) {
         setError(data.error.message || "An error occurred with the API.");
@@ -75,16 +82,45 @@ export const MusicProvider = ({ children }) => {
     }
   };
 
+  const loadMoreSongs = useCallback(async () => {
+    if (!nextPageToken || isFetchingMore) return;
+    setIsFetchingMore(true);
+    try {
+      const response = await fetch(
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=12&q=${currentQuery}&key=${API_KEY}&type=video&pageToken=${nextPageToken}`
+      );
+      const data = await response.json();
+      if (data.items) {
+        const moreSongs = data.items.map((item) => ({
+          id: item.id.videoId,
+          title: item.snippet.title,
+          artist: item.snippet.channelTitle,
+          albumArt: item.snippet.thumbnails.high.url,
+        }));
+        setSongs((prevSongs) => [...prevSongs, ...moreSongs]);
+        setNextPageToken(data.nextPageToken || "");
+      }
+    } catch (err) {
+      console.error("Error fetching more songs:", err);
+    } finally {
+      setIsFetchingMore(false);
+    }
+  }, [nextPageToken, currentQuery, isFetchingMore]);
+
   const playNext = useCallback(() => {
+    if (songs.length === 0) return;
     const currentIndex = songs.findIndex((song) => song.id === currentSong?.id);
     const nextIndex = (currentIndex + 1) % songs.length;
     setCurrentSong(songs[nextIndex]);
+    setIsPlaying(true);
   }, [songs, currentSong]);
 
   const playPrev = useCallback(() => {
+    if (songs.length === 0) return;
     const currentIndex = songs.findIndex((song) => song.id === currentSong?.id);
     const prevIndex = (currentIndex - 1 + songs.length) % songs.length;
     setCurrentSong(songs[prevIndex]);
+    setIsPlaying(true);
   }, [songs, currentSong]);
 
   const togglePlay = useCallback(() => {
@@ -108,30 +144,34 @@ export const MusicProvider = ({ children }) => {
   const onScrub = (value) => {
     if (playerRef.current) {
       playerRef.current.seekTo(value);
-      setTrackProgress(value);
+      setTrackProgress(Number(value));
     }
   };
 
+  const onScrubEnd = () => {};
+
   const toggleVideo = () => setShowVideo((prev) => !prev);
 
-  // --- YouTube Player Event Handlers ---
   const onPlayerReady = (event) => {
     playerRef.current = event.target;
     playerRef.current.setVolume(volume * 100);
   };
 
   const onPlayerStateChange = (event) => {
-    if (event.data === window.YT.PlayerState.PLAYING) {
+    const playerState = event.data;
+    clearInterval(intervalRef.current);
+    if (playerState === window.YT.PlayerState.PLAYING) {
       setIsPlaying(true);
       setDuration(playerRef.current.getDuration());
       intervalRef.current = setInterval(() => {
-        setTrackProgress(playerRef.current.getCurrentTime());
+        if (playerRef.current) {
+          setTrackProgress(playerRef.current.getCurrentTime());
+        }
       }, 500);
     } else {
       setIsPlaying(false);
-      clearInterval(intervalRef.current);
     }
-    if (event.data === window.YT.PlayerState.ENDED) {
+    if (playerState === window.YT.PlayerState.ENDED) {
       playNext();
     }
   };
@@ -155,9 +195,13 @@ export const MusicProvider = ({ children }) => {
     playNext,
     playPrev,
     onScrub,
+    onScrubEnd,
     setVolume,
     searchSongs,
     toggleVideo,
+    loadMoreSongs,
+    isFetchingMore,
+    hasMoreSongs: !!nextPageToken,
   };
 
   return (
