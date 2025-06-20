@@ -1,12 +1,11 @@
 // src/components/Header.jsx
-
 import React, { useState } from "react";
-import { Search, ChevronLeft, ChevronRight, User } from "lucide-react";
+import { Search } from "lucide-react";
 import { useMusic } from "../hooks/useMusic.js";
 
 const Header = () => {
-  const [searchTerm, setSearchTerm] = useState("");
   const { searchSongs } = useMusic();
+  const [searchTerm, setSearchTerm] = useState("");
 
   const handleSearch = (e) => {
     e.preventDefault();
@@ -14,38 +13,22 @@ const Header = () => {
   };
 
   return (
-    <header className="flex items-center justify-between p-4">
-      <div className="flex items-center gap-4">
-        <button className="p-1 rounded-full bg-black/20 hover:bg-black/40">
-          <ChevronLeft size={20} />
-        </button>
-        <button className="p-1 rounded-full bg-black/20 hover:bg-black/40">
-          <ChevronRight size={20} />
-        </button>
-      </div>
+    <header className="p-6">
       <form
         onSubmit={handleSearch}
-        className="relative w-full max-w-xs hidden sm:block"
+        className="relative w-full max-w-lg mx-auto"
       >
+        <div className="absolute inset-y-0 left-0 flex items-center pl-5 pointer-events-none">
+          <Search size={24} className="text-zinc-400" />
+        </div>
         <input
           type="text"
-          placeholder="Search songs on YouTube..."
+          placeholder="Search for songs, artists, albums..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full bg-zinc-800 rounded-full px-4 py-2 pl-10 text-sm placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500"
+          className="w-full bg-zinc-800 rounded-full px-6 py-3 pl-16 text-lg placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500"
         />
-        <button
-          type="submit"
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
-        >
-          <Search size={20} />
-        </button>
       </form>
-      <div className="flex items-center gap-4">
-        <button className="p-2 rounded-full bg-black/20 hover:bg-black/40">
-          <User size={20} />
-        </button>
-      </div>
     </header>
   );
 };
