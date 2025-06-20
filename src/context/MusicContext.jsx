@@ -26,18 +26,61 @@ export const MusicProvider = ({ children }) => {
   const [currentQuery, setCurrentQuery] = useState("");
   const [isShuffling, setIsShuffling] = useState(false);
   const [repeatMode, setRepeatMode] = useState("none");
+  const [recentlyPlayed, setRecentlyPlayed] = useState([]);
+  // FIX: Added the missing state declarations
+  const [latestBollywood, setLatestBollywood] = useState([]);
+  const [oldBollywood, setOldBollywood] = useState([]);
 
   const playerRef = useRef(null);
   const intervalRef = useRef();
 
-  const startTimer = useCallback(() => {
-    clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(() => {
-      if (playerRef.current?.getCurrentTime) {
-        setTrackProgress(playerRef.current.getCurrentTime());
-      }
-    }, 500);
+  useEffect(() => {
+    const saved = localStorage.getItem("vibesync-recently-played");
+    if (saved) {
+      setRecentlyPlayed(JSON.parse(saved));
+    }
   }, []);
+
+  useEffect(() => {
+    const fetchCategory = async (query, setter) => {
+      if (!API_KEY) return; // Don't fetch if API key is missing
+      try {
+        const response = await fetch(
+          `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=8&q=${query}&key=${API_KEY}&type=video`
+        );
+        const data = await response.json();
+        if (data.items) {
+          const categorySongs = data.items.map((item) => ({
+            id: item.id.videoId,
+            title: item.snippet.title,
+            artist: item.snippet.channelTitle,
+            albumArt: item.snippet.thumbnails.high.url,
+          }));
+          setter(categorySongs);
+        }
+      } catch (err) {
+        console.error(`Failed to fetch ${query}`, err);
+      }
+    };
+    fetchCategory("latest bollywood songs 2024", setLatestBollywood);
+    fetchCategory("old bollywood songs 90s", setOldBollywood);
+  }, []);
+
+  useEffect(() => {
+    if (currentSong) {
+      setRecentlyPlayed((prev) => {
+        const newHistory = [
+          currentSong,
+          ...prev.filter((s) => s.id !== currentSong.id),
+        ].slice(0, 8);
+        localStorage.setItem(
+          "vibesync-recently-played",
+          JSON.stringify(newHistory)
+        );
+        return newHistory;
+      });
+    }
+  }, [currentSong]);
 
   useEffect(() => {
     if (playerRef.current) {
@@ -117,41 +160,28 @@ export const MusicProvider = ({ children }) => {
     }
   }, [nextPageToken, currentQuery, isFetchingMore]);
 
-  const playNext = useCallback(
-    (isAutoEnd = false) => {
-      if (songs.length === 0) return;
-      const currentIndex = songs.findIndex(
-        (song) => song.id === currentSong?.id
-      );
-
-      if (isShuffling) {
-        let nextIndex;
-        do {
-          nextIndex = Math.floor(Math.random() * songs.length);
-        } while (songs.length > 1 && nextIndex === currentIndex);
-        setCurrentSong(songs[nextIndex]);
-        return;
-      }
-
-      const isLastSong = currentIndex === songs.length - 1;
-      if (isAutoEnd && repeatMode === "none" && isLastSong) {
-        setIsPlaying(false);
-        return;
-      }
-
-      const nextIndex = isLastSong ? 0 : currentIndex + 1;
-      setCurrentSong(songs[nextIndex]);
-    },
-    [songs, currentSong, isShuffling, repeatMode]
-  );
+  const playNext = useCallback(() => {
+    if (songs.length === 0 && recentlyPlayed.length === 0) return;
+    const currentList = songs.length > 0 ? songs : recentlyPlayed;
+    const currentIndex = currentList.findIndex(
+      (song) => song.id === currentSong?.id
+    );
+    const nextIndex = (currentIndex + 1) % currentList.length;
+    setCurrentSong(currentList[nextIndex]);
+    setIsPlaying(true);
+  }, [songs, recentlyPlayed, currentSong]);
 
   const playPrev = useCallback(() => {
-    if (songs.length === 0) return;
-    const currentIndex = songs.findIndex((song) => song.id === currentSong?.id);
-    const prevIndex = (currentIndex - 1 + songs.length) % songs.length;
-    setCurrentSong(songs[prevIndex]);
+    if (songs.length === 0 && recentlyPlayed.length === 0) return;
+    const currentList = songs.length > 0 ? songs : recentlyPlayed;
+    const currentIndex = currentList.findIndex(
+      (song) => song.id === currentSong?.id
+    );
+    const prevIndex =
+      (currentIndex - 1 + currentList.length) % currentList.length;
+    setCurrentSong(currentList[prevIndex]);
     setIsPlaying(true);
-  }, [songs, currentSong]);
+  }, [songs, recentlyPlayed, currentSong]);
 
   const togglePlay = useCallback(() => {
     if (currentSong) {
@@ -172,53 +202,35 @@ export const MusicProvider = ({ children }) => {
   );
 
   const onScrub = (value) => {
-    clearInterval(intervalRef.current);
-    setTrackProgress(Number(value));
-  };
-
-  const onScrubEnd = () => {
     if (playerRef.current) {
-      playerRef.current.seekTo(trackProgress);
-      if (isPlaying) {
-        // Only restart timer if it was playing
-        startTimer();
-      }
+      playerRef.current.seekTo(value);
     }
   };
 
   const toggleVideo = () => setShowVideo((prev) => !prev);
   const toggleShuffle = () => setIsShuffling((prev) => !prev);
-  const cycleRepeatMode = () => {
-    const modes = ["none", "all", "one"];
-    const currentModeIndex = modes.indexOf(repeatMode);
-    setRepeatMode(modes[(currentModeIndex + 1) % modes.length]);
-  };
+  const cycleRepeatMode = () =>
+    setRepeatMode((prev) =>
+      prev === "none" ? "all" : prev === "all" ? "one" : "none"
+    );
 
   const onPlayerReady = (event) => {
     playerRef.current = event.target;
-    if (isPlaying) {
-      event.target.playVideo();
-    }
   };
 
   const onPlayerStateChange = (event) => {
-    const playerState = event.data;
-
-    if (playerState === window.YT.PlayerState.PLAYING) {
-      if (!isPlaying) setIsPlaying(true); // Sync state
+    clearInterval(intervalRef.current);
+    if (event.data === window.YT.PlayerState.PLAYING) {
+      setIsPlaying(true);
       setDuration(playerRef.current.getDuration());
-      startTimer();
-    } else if (playerState === window.YT.PlayerState.PAUSED) {
-      if (isPlaying) setIsPlaying(false); // Sync state
-      clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(() => {
+        setTrackProgress(playerRef.current.getCurrentTime());
+      }, 500);
+    } else {
+      setIsPlaying(false);
     }
-    if (playerState === window.YT.PlayerState.ENDED) {
-      if (repeatMode === "one") {
-        playerRef.current.seekTo(0);
-        playerRef.current.playVideo();
-      } else {
-        playNext(true);
-      }
+    if (event.data === window.YT.PlayerState.ENDED) {
+      playNext();
     }
   };
 
@@ -241,7 +253,6 @@ export const MusicProvider = ({ children }) => {
     playNext,
     playPrev,
     onScrub,
-    onScrubEnd,
     setVolume,
     searchSongs,
     toggleVideo,
@@ -252,6 +263,9 @@ export const MusicProvider = ({ children }) => {
     toggleShuffle,
     repeatMode,
     cycleRepeatMode,
+    recentlyPlayed,
+    latestBollywood,
+    oldBollywood,
   };
 
   return (

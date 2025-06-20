@@ -1,3 +1,4 @@
+// src/hooks/useMusic.js
 import { useContext } from "react";
 import { MusicContext } from "../context/MusicContext.jsx";
 
