@@ -36,6 +36,9 @@ const Player = () => {
     toggleShuffle,
     repeatMode,
     cycleRepeatMode,
+    addFavorite,
+    removeFavorite,
+    isFavorite,
   } = useMusic();
 
   const formatTime = (time) => {
@@ -46,8 +49,6 @@ const Player = () => {
       .padStart(2, "0");
     return `${minutes}:${seconds}`;
   };
-
-  const currentPercentage = duration ? (trackProgress / duration) * 100 : 0;
 
   const getVolumeIcon = () => {
     if (Number(volume) === 0) return <VolumeX size={20} />;
@@ -66,6 +67,15 @@ const Player = () => {
         return (
           <Repeat {...commonProps} className="text-zinc-400 hover:text-white" />
         );
+    }
+  };
+
+  const toggleFavorite = () => {
+    if (!currentSong) return;
+    if (isFavorite(currentSong.id)) {
+      removeFavorite(currentSong.id);
+    } else {
+      addFavorite(currentSong);
     }
   };
 
@@ -158,29 +168,40 @@ const Player = () => {
           <span className="text-xs text-zinc-400">{formatTime(duration)}</span>
         </div>
       </div>
-      <div className="hidden sm:flex items-center gap-4 w-1/3 justify-end">
-        <button
-          onClick={toggleVideo}
-          className="p-2 rounded-full hover:bg-zinc-700"
-        >
-          {showVideo ? (
-            <Video size={20} />
-          ) : (
-            <VideoOff size={20} className="text-rose-500" />
-          )}
-        </button>
-        <Heart size={20} className="hover:text-rose-400" />
-        <div className="flex items-center gap-2">
-          {getVolumeIcon()}
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={volume}
-            onChange={(e) => setVolume(e.target.value)}
-            className="w-24 h-1 bg-zinc-600 rounded-lg appearance-none cursor-pointer accent-rose-500"
-          />
+      <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-1/3 justify-end px-4">
+        <div className="flex items-center gap-4 w-full justify-between sm:justify-end">
+          <button
+            onClick={toggleVideo}
+            className="p-2 rounded-full hover:bg-zinc-700"
+          >
+            {showVideo ? (
+              <Video size={20} />
+            ) : (
+              <VideoOff size={20} className="text-rose-500" />
+            )}
+          </button>
+          <button
+            onClick={toggleFavorite}
+            disabled={!currentSong}
+            className="p-2 rounded-full hover:bg-zinc-700"
+          >
+            <Heart
+              size={20}
+              className={isFavorite(currentSong?.id) ? "text-rose-500" : ""}
+            />
+          </button>
+          <div className="flex items-center gap-2 w-1/2 sm:w-auto">
+            {getVolumeIcon()}
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={(e) => setVolume(e.target.value)}
+              className="w-full sm:w-24 h-1 bg-zinc-600 rounded-lg appearance-none cursor-pointer accent-rose-500"
+            />
+          </div>
         </div>
       </div>
     </footer>

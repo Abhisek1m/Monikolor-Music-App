@@ -1,4 +1,10 @@
 // src/context/MusicContext.jsx
+import {
+  mockLatestBollywood,
+  mockOldBollywood,
+  mockFavorites,
+  mockRecentlyPlayed,
+} from "../data/mockData.js";
 import React, {
   useState,
   useRef,
@@ -6,13 +12,15 @@ import React, {
   useCallback,
   useEffect,
 } from "react";
-import YouTube from "react-youtube";
+import { db, auth } from "../firebase.js";
+import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { doc, setDoc, deleteDoc } from "firebase/firestore";
 
 export const MusicContext = createContext();
 const API_KEY = import.meta.env.VITE_YOUTUBE_API_KEY;
 
 export const MusicProvider = ({ children }) => {
-  const [songs, setSongs] = useState([]);
+  const [searchResults, setSearchResults] = useState([]);
   const [currentSong, setCurrentSong] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(1);
@@ -20,226 +28,315 @@ export const MusicProvider = ({ children }) => {
   const [duration, setDuration] = useState(0);
   const [trackProgress, setTrackProgress] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [error, setError] = useState(null);
-  const [nextPageToken, setNextPageToken] = useState("");
-  const [currentQuery, setCurrentQuery] = useState("");
+  const [recentlyPlayed, setRecentlyPlayed] = useState(mockRecentlyPlayed);
+  const [latestBollywood, setLatestBollywood] = useState(mockLatestBollywood);
+  const [oldBollywood, setOldBollywood] = useState(mockOldBollywood);
+  const [favorites, setFavorites] = useState(mockFavorites);
+  const [userId, setUserId] = useState(null);
   const [isShuffling, setIsShuffling] = useState(false);
-  const [repeatMode, setRepeatMode] = useState("none");
-  const [recentlyPlayed, setRecentlyPlayed] = useState([]);
-  // FIX: Added the missing state declarations
-  const [latestBollywood, setLatestBollywood] = useState([]);
-  const [oldBollywood, setOldBollywood] = useState([]);
+  const [repeatMode, setRepeatMode] = useState("off"); // "off" | "all" | "one"
 
   const playerRef = useRef(null);
   const intervalRef = useRef();
+  const shuffledQueueRef = useRef([]);
 
+  // --- AUTH & DATA FETCHING ---
   useEffect(() => {
-    const saved = localStorage.getItem("vibesync-recently-played");
-    if (saved) {
-      setRecentlyPlayed(JSON.parse(saved));
-    }
-  }, []);
-
-  useEffect(() => {
-    const fetchCategory = async (query, setter) => {
-      if (!API_KEY) return; // Don't fetch if API key is missing
-      try {
-        const response = await fetch(
-          `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=8&q=${query}&key=${API_KEY}&type=video`
-        );
-        const data = await response.json();
-        if (data.items) {
-          const categorySongs = data.items.map((item) => ({
-            id: item.id.videoId,
-            title: item.snippet.title,
-            artist: item.snippet.channelTitle,
-            albumArt: item.snippet.thumbnails.high.url,
-          }));
-          setter(categorySongs);
-        }
-      } catch (err) {
-        console.error(`Failed to fetch ${query}`, err);
-      }
-    };
-    fetchCategory("latest bollywood songs 2024", setLatestBollywood);
-    fetchCategory("old bollywood songs 90s", setOldBollywood);
-  }, []);
-
-  useEffect(() => {
-    if (currentSong) {
-      setRecentlyPlayed((prev) => {
-        const newHistory = [
-          currentSong,
-          ...prev.filter((s) => s.id !== currentSong.id),
-        ].slice(0, 8);
-        localStorage.setItem(
-          "vibesync-recently-played",
-          JSON.stringify(newHistory)
-        );
-        return newHistory;
-      });
-    }
-  }, [currentSong]);
-
-  useEffect(() => {
-    if (playerRef.current) {
-      if (isPlaying) {
-        playerRef.current.playVideo();
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUserId(user.uid);
       } else {
-        playerRef.current.pauseVideo();
+        signInAnonymously(auth).catch((err) =>
+          console.error("Anonymous sign-in failed:", err)
+        );
       }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- FAVORITES HANDLING ---
+  const addFavorite = async (song) => {
+    if (!userId) return;
+    try {
+      const docRef = doc(db, `users/${userId}/favorites`, song.id);
+      await setDoc(docRef, song);
+      setFavorites((prev) => [...prev, song]);
+    } catch (err) {
+      console.error("Error adding favorite:", err);
     }
-  }, [isPlaying]);
+  };
+
+  const removeFavorite = async (songId) => {
+    if (!userId) return;
+    try {
+      const docRef = doc(db, `users/${userId}/favorites`, songId);
+      await deleteDoc(docRef);
+      setFavorites((prev) => prev.filter((song) => song.id !== songId));
+    } catch (err) {
+      console.error("Error removing favorite:", err);
+    }
+  };
+
+  const isFavorite = (songId) => {
+    return favorites.some((song) => song.id === songId);
+  };
 
   useEffect(() => {
-    if (playerRef.current?.setVolume) {
-      playerRef.current.setVolume(volume * 100);
+    if (currentSong && userId) {
+      const docRef = doc(db, `users/${userId}/recentlyPlayed`, currentSong.id);
+      setDoc(docRef, { ...currentSong, playedAt: new Date() }, { merge: true });
     }
-  }, [volume]);
+  }, [currentSong, userId]);
 
+  // --- PLAYER CONTROLS ---
+  const playSong = useCallback(
+    (song, fromPlaylist = null) => {
+      if (fromPlaylist) {
+        setSearchResults(fromPlaylist);
+      }
+      if (currentSong?.id === song.id) {
+        togglePlay();
+      } else {
+        setCurrentSong(song);
+      }
+    },
+    [currentSong]
+  );
+
+  const togglePlay = useCallback(() => {
+    if (!playerRef.current) return;
+    const playerState = playerRef.current.getPlayerState();
+    if (playerState === 1) {
+      // 1 = playing
+      playerRef.current.pauseVideo();
+    } else {
+      playerRef.current.playVideo();
+    }
+  }, []);
+
+  const getShuffledQueue = useCallback((currentList, currentSongId) => {
+    if (!currentList.length) return [];
+    const queue = [...currentList];
+    const currentIndex = queue.findIndex((s) => s.id === currentSongId);
+
+    // Remove current song if it exists
+    if (currentIndex !== -1) {
+      queue.splice(currentIndex, 1);
+    }
+
+    // Fisher-Yates shuffle
+    for (let i = queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [queue[i], queue[j]] = [queue[j], queue[i]];
+    }
+
+    // Add current song back at the start if it existed
+    if (currentIndex !== -1) {
+      queue.unshift(currentList[currentIndex]);
+    }
+
+    return queue;
+  }, []);
+
+  const toggleShuffle = useCallback(() => {
+    setIsShuffling((prev) => {
+      const newIsShuffling = !prev;
+      if (newIsShuffling) {
+        const currentList =
+          searchResults.length > 0 ? searchResults : recentlyPlayed;
+        shuffledQueueRef.current = getShuffledQueue(
+          currentList,
+          currentSong?.id
+        );
+      }
+      return newIsShuffling;
+    });
+  }, [searchResults, recentlyPlayed, currentSong, getShuffledQueue]);
+
+  const cycleRepeatMode = useCallback(() => {
+    setRepeatMode((current) => {
+      switch (current) {
+        case "off":
+          return "all";
+        case "all":
+          return "one";
+        case "one":
+          return "off";
+        default:
+          return "off";
+      }
+    });
+  }, []);
+
+  const playNext = useCallback(() => {
+    const currentList =
+      searchResults.length > 0 ? searchResults : recentlyPlayed;
+    if (currentList.length === 0) return;
+
+    if (repeatMode === "one") {
+      if (playerRef.current) {
+        playerRef.current.seekTo(0);
+        playerRef.current.playVideo();
+      }
+      return;
+    }
+
+    if (isShuffling) {
+      const currentIndex = shuffledQueueRef.current.findIndex(
+        (s) => s.id === currentSong?.id
+      );
+      if (currentIndex === shuffledQueueRef.current.length - 1) {
+        if (repeatMode === "all") {
+          shuffledQueueRef.current = getShuffledQueue(currentList, null);
+          setCurrentSong(shuffledQueueRef.current[0]);
+        }
+      } else {
+        setCurrentSong(shuffledQueueRef.current[currentIndex + 1]);
+      }
+    } else {
+      const currentIndex = currentList.findIndex(
+        (s) => s.id === currentSong?.id
+      );
+      if (currentIndex === currentList.length - 1) {
+        if (repeatMode === "all") {
+          setCurrentSong(currentList[0]);
+        }
+      } else {
+        setCurrentSong(currentList[currentIndex + 1]);
+      }
+    }
+  }, [
+    searchResults,
+    recentlyPlayed,
+    currentSong,
+    isShuffling,
+    repeatMode,
+    getShuffledQueue,
+  ]);
+
+  const playPrev = useCallback(() => {
+    const currentList =
+      searchResults.length > 0 ? searchResults : recentlyPlayed;
+    if (currentList.length === 0) return;
+
+    if (repeatMode === "one") {
+      if (playerRef.current) {
+        playerRef.current.seekTo(0);
+        playerRef.current.playVideo();
+      }
+      return;
+    }
+
+    if (isShuffling) {
+      const currentIndex = shuffledQueueRef.current.findIndex(
+        (s) => s.id === currentSong?.id
+      );
+      if (currentIndex === 0) {
+        if (repeatMode === "all") {
+          shuffledQueueRef.current = getShuffledQueue(currentList, null);
+          setCurrentSong(
+            shuffledQueueRef.current[shuffledQueueRef.current.length - 1]
+          );
+        }
+      } else {
+        setCurrentSong(shuffledQueueRef.current[currentIndex - 1]);
+      }
+    } else {
+      const currentIndex = currentList.findIndex(
+        (s) => s.id === currentSong?.id
+      );
+      if (currentIndex === 0) {
+        if (repeatMode === "all") {
+          setCurrentSong(currentList[currentList.length - 1]);
+        }
+      } else {
+        setCurrentSong(currentList[currentIndex - 1]);
+      }
+    }
+  }, [
+    searchResults,
+    recentlyPlayed,
+    currentSong,
+    isShuffling,
+    repeatMode,
+    getShuffledQueue,
+  ]);
+
+  const onScrub = (value) => {
+    if (playerRef.current) {
+      playerRef.current.seekTo(value);
+      setTrackProgress(Number(value));
+    }
+  };
+
+  const toggleVideo = () => setShowVideo((prev) => !prev);
+
+  // --- YOUTUBE API ---
   const searchSongs = async (query) => {
-    if (!query) return;
+    if (!query || !API_KEY) {
+      setError("API Key is missing.");
+      return;
+    }
     setIsLoading(true);
     setError(null);
-    setSongs([]);
-    setCurrentQuery(query);
     try {
       const response = await fetch(
-        `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=12&q=${query}&key=${API_KEY}&type=video`
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=18&q=${query}&key=${API_KEY}&type=video`
       );
       const data = await response.json();
       if (data.items) {
-        const searchedSongs = data.items.map((item) => ({
+        const newSongs = data.items.map((item) => ({
           id: item.id.videoId,
           title: item.snippet.title,
           artist: item.snippet.channelTitle,
           albumArt: item.snippet.thumbnails.high.url,
         }));
-        setSongs(searchedSongs);
-        setNextPageToken(data.nextPageToken || "");
-        if (searchedSongs.length > 0) {
-          setCurrentSong(searchedSongs[0]);
-          setIsPlaying(true);
+        setSearchResults(newSongs);
+        if (newSongs.length > 0) {
+          playSong(newSongs[0], newSongs);
         } else {
           setCurrentSong(null);
         }
       } else if (data.error) {
-        setError(data.error.message || "An error occurred with the API.");
+        setError(data.error.message);
       }
     } catch (err) {
-      console.error("Error searching for songs:", err);
-      setError("Failed to fetch songs. Check your API key and network.");
+      console.error(err);
+      setError("Failed to fetch songs.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const loadMoreSongs = useCallback(async () => {
-    if (!nextPageToken || isFetchingMore) return;
-    setIsFetchingMore(true);
-    try {
-      const response = await fetch(
-        `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=12&q=${currentQuery}&key=${API_KEY}&type=video&pageToken=${nextPageToken}`
-      );
-      const data = await response.json();
-      if (data.items) {
-        const moreSongs = data.items.map((item) => ({
-          id: item.id.videoId,
-          title: item.snippet.title,
-          artist: item.snippet.channelTitle,
-          albumArt: item.snippet.thumbnails.high.url,
-        }));
-        setSongs((prevSongs) => [...prevSongs, ...moreSongs]);
-        setNextPageToken(data.nextPageToken || "");
-      }
-    } catch (err) {
-      console.error("Error fetching more songs:", err);
-    } finally {
-      setIsFetchingMore(false);
-    }
-  }, [nextPageToken, currentQuery, isFetchingMore]);
-
-  const playNext = useCallback(() => {
-    if (songs.length === 0 && recentlyPlayed.length === 0) return;
-    const currentList = songs.length > 0 ? songs : recentlyPlayed;
-    const currentIndex = currentList.findIndex(
-      (song) => song.id === currentSong?.id
-    );
-    const nextIndex = (currentIndex + 1) % currentList.length;
-    setCurrentSong(currentList[nextIndex]);
-    setIsPlaying(true);
-  }, [songs, recentlyPlayed, currentSong]);
-
-  const playPrev = useCallback(() => {
-    if (songs.length === 0 && recentlyPlayed.length === 0) return;
-    const currentList = songs.length > 0 ? songs : recentlyPlayed;
-    const currentIndex = currentList.findIndex(
-      (song) => song.id === currentSong?.id
-    );
-    const prevIndex =
-      (currentIndex - 1 + currentList.length) % currentList.length;
-    setCurrentSong(currentList[prevIndex]);
-    setIsPlaying(true);
-  }, [songs, recentlyPlayed, currentSong]);
-
-  const togglePlay = useCallback(() => {
-    if (currentSong) {
-      setIsPlaying((prev) => !prev);
-    }
-  }, [currentSong]);
-
-  const playSong = useCallback(
-    (song) => {
-      if (currentSong?.id === song.id) {
-        togglePlay();
-      } else {
-        setCurrentSong(song);
-        setIsPlaying(true);
-      }
-    },
-    [currentSong, togglePlay]
-  );
-
-  const onScrub = (value) => {
-    if (playerRef.current) {
-      playerRef.current.seekTo(value);
-    }
-  };
-
-  const toggleVideo = () => setShowVideo((prev) => !prev);
-  const toggleShuffle = () => setIsShuffling((prev) => !prev);
-  const cycleRepeatMode = () =>
-    setRepeatMode((prev) =>
-      prev === "none" ? "all" : prev === "all" ? "one" : "none"
-    );
-
   const onPlayerReady = (event) => {
     playerRef.current = event.target;
+    playerRef.current.setVolume(volume * 100);
+    event.target.playVideo();
   };
 
   const onPlayerStateChange = (event) => {
+    const playerState = event.data;
     clearInterval(intervalRef.current);
-    if (event.data === window.YT.PlayerState.PLAYING) {
+    if (playerState === 1) {
+      // Playing
       setIsPlaying(true);
       setDuration(playerRef.current.getDuration());
       intervalRef.current = setInterval(() => {
-        setTrackProgress(playerRef.current.getCurrentTime());
+        setTrackProgress(playerRef.current?.getCurrentTime() || 0);
       }, 500);
     } else {
       setIsPlaying(false);
     }
-    if (event.data === window.YT.PlayerState.ENDED) {
+    if (playerState === 0) {
+      // Ended
       playNext();
     }
   };
 
-  const videoContainerClass = showVideo
-    ? "fixed z-50 bottom-24 sm:bottom-36 right-4 bg-black p-2 rounded-lg shadow-2xl transition-all w-[320px] sm:w-[480px]"
-    : "fixed -z-10 -top-full -left-full opacity-0";
-
   const value = {
-    songs,
+    playerRef,
+    searchResults,
     currentSong,
     isPlaying,
     trackProgress,
@@ -256,36 +353,22 @@ export const MusicProvider = ({ children }) => {
     setVolume,
     searchSongs,
     toggleVideo,
-    loadMoreSongs,
-    isFetchingMore,
-    hasMoreSongs: !!nextPageToken,
+    recentlyPlayed,
+    latestBollywood,
+    oldBollywood,
+    favorites,
+    addFavorite,
+    removeFavorite,
+    isFavorite,
+    onPlayerReady,
+    onPlayerStateChange,
     isShuffling,
     toggleShuffle,
     repeatMode,
     cycleRepeatMode,
-    recentlyPlayed,
-    latestBollywood,
-    oldBollywood,
   };
 
   return (
-    <MusicContext.Provider value={value}>
-      {children}
-      <div className={videoContainerClass}>
-        {currentSong && (
-          <YouTube
-            videoId={currentSong.id}
-            opts={{
-              height: "180",
-              width: "100%",
-              playerVars: { autoplay: 1, controls: 0 },
-            }}
-            onReady={onPlayerReady}
-            onStateChange={onPlayerStateChange}
-            key={currentSong.id}
-          />
-        )}
-      </div>
-    </MusicContext.Provider>
+    <MusicContext.Provider value={value}>{children}</MusicContext.Provider>
   );
 };
